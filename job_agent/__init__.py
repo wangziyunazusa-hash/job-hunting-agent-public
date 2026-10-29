@@ -1,1 +1,1 @@
-"""Offline, manual-import Phase 1 services."""
+"""Local job workspace with explicitly authorized read-only ATS ingestion."""

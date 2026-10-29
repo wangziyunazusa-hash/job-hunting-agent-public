@@ -28,3 +28,14 @@ def test_ui_workflow(tmp_path, monkeypatch):
     assert db.execute('SELECT count(*) FROM facts WHERE confirmed=1').fetchone()[0]==1
     assert db.execute('SELECT count(*) FROM match_reports').fetchone()[0]==1
     db.close()
+
+
+def test_ui_collection_empty_sources_does_not_network(tmp_path,monkeypatch):
+    original=core.connect
+    monkeypatch.setattr(core,'connect',lambda:original(tmp_path/'ui.sqlite'))
+    import job_agent.sources as sources
+    monkeypatch.setattr(sources.ReadOnlyTransport,'get',lambda *a:(_ for _ in ()).throw(AssertionError('network forbidden')))
+    app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py')).run()
+    next(button for button in app.button if button.label=='采集已授权来源并匹配').click().run()
+    assert not app.exception
+    assert len(app.json)==1

@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from contextlib import contextmanager
+import uuid
 import hashlib
 import ipaddress
 import json
@@ -16,7 +19,23 @@ def connect(path=None):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript((ROOT / 'migrations/001_initial.sql').read_text())
+    for migration in sorted((ROOT / 'migrations').glob('*.sql')):
+        version = int(migration.name.split('_')[0])
+        if not db.execute('SELECT 1 FROM schema_migrations WHERE version=?',(version,)).fetchone():
+            db.executescript(migration.read_text())
     return db
+
+@contextmanager
+def savepoint(db):
+    name = 'sp_' + uuid.uuid4().hex
+    db.execute('SAVEPOINT '+name)
+    try:
+        yield
+        db.execute('RELEASE SAVEPOINT '+name)
+    except Exception:
+        db.execute('ROLLBACK TO SAVEPOINT '+name)
+        db.execute('RELEASE SAVEPOINT '+name)
+        raise
 
 def norm(value):
     return ' '.join(unicodedata.normalize('NFKC', value).casefold().split())
@@ -52,13 +71,15 @@ def check_source(source, url):
         if host != domain and not host.endswith('.'+domain):
             raise ValueError('来源链接必须属于所选平台')
 
-def import_job(db, *, company, title, location, source, url, jd, application_url='', requisition_id=''):
+def import_job(db, *, company, title, location, source, url, jd, application_url='', requisition_id='', method='manual'):
     if not all(x.strip() for x in (company,title,location,jd)) or len(jd)>200000:
         raise ValueError('公司、岗位、地点和 JD 必填，JD 上限 20 万字符')
+    if method not in ('manual','api') or (method == 'api' and source != 'official'):
+        raise ValueError('不允许的导入方式')
     url = safe_url(url)
     check_source(source,url)
     app = safe_url(application_url) if application_url.strip() else None
-    with db:
+    with savepoint(db):
         link = db.execute('SELECT * FROM job_source_links WHERE url=?',(url,)).fetchone()
         job_id = link['job_id'] if link else None
         if not job_id:
@@ -76,21 +97,23 @@ def import_job(db, *, company, title, location, source, url, jd, application_url
             job_id = db.execute('INSERT INTO jobs(company,title,location,requisition_id) VALUES(?,?,?,?)',
                                 (company.strip(),title.strip(),location.strip(),requisition_id.strip() or None)).lastrowid
         if not link:
-            link_id = db.execute('INSERT INTO job_source_links(job_id,source,url,application_url) VALUES(?,?,?,?)',
-                                 (job_id,source,url,app)).lastrowid
+            link_id = db.execute('INSERT INTO job_source_links(job_id,source,url,application_url,method) VALUES(?,?,?,?,?)',
+                                 (job_id,source,url,app,method)).lastrowid
         else:
             link_id = link['id']
             if app:
                 db.execute('UPDATE job_source_links SET application_url=? WHERE id=?',(app,link_id))
         digest = hashlib.sha256(jd.encode()).hexdigest()
         db.execute('INSERT OR IGNORE INTO jd_snapshots(source_link_id,content,content_hash) VALUES(?,?,?)',(link_id,jd,digest))
-        db.execute('INSERT INTO audit_events(action,entity_id) VALUES(?,?)',('manual_import',job_id))
+        snapshot_id=db.execute('SELECT id FROM jd_snapshots WHERE source_link_id=? AND content_hash=?',(link_id,digest)).fetchone()[0]
+        db.execute('UPDATE job_source_links SET latest_snapshot_id=?,last_observed_at=? WHERE id=?',(snapshot_id,datetime.now(timezone.utc).isoformat(),link_id))
+        db.execute('INSERT INTO audit_events(action,entity_id) VALUES(?,?)',('manual_import' if method == 'manual' else 'api_import',job_id))
     return job_id
 
 def preferred(db, job_id):
     return db.execute("""SELECT l.*, s.content, s.content_hash FROM job_source_links l
-        JOIN jd_snapshots s ON s.source_link_id=l.id WHERE l.job_id=?
-        ORDER BY CASE l.source WHEN 'official' THEN 0 ELSE 1 END, s.id DESC LIMIT 1""",(job_id,)).fetchone()
+        JOIN jd_snapshots s ON s.id=l.latest_snapshot_id WHERE l.job_id=?
+        ORDER BY CASE l.source WHEN 'official' THEN 0 ELSE 1 END, l.last_observed_at DESC, s.id DESC LIMIT 1""",(job_id,)).fetchone()
 
 def possible_duplicates(db, job_id):
     job = db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
@@ -116,8 +139,15 @@ def contains(text, term):
         return bool(re.search(r'(?<![a-z0-9_])'+re.escape(term)+r'(?![a-z0-9_])',text))
     return term in text
 
+def matching_source(db, job_id):
+    """LinkedIn/OpenWork first for matching; official canonical preference is unchanged."""
+    return db.execute("""SELECT l.*, s.content, s.content_hash FROM job_source_links l
+        JOIN jd_snapshots s ON s.id=l.latest_snapshot_id WHERE l.job_id=?
+        ORDER BY CASE l.source WHEN 'official' THEN 1 ELSE 0 END,
+        l.last_observed_at DESC, s.id DESC, l.id DESC LIMIT 1""",(job_id,)).fetchone()
+
 def match_job(db, job_id):
-    row = preferred(db, job_id)
+    row = matching_source(db, job_id)
     if row is None:
         raise ValueError('岗位不存在')
     jd = norm(row['content'])
@@ -128,7 +158,7 @@ def match_job(db, job_id):
             ids=[f['id'] for f in facts if any(contains(norm(f['text_ja']+' '+f['text_en']),a) for a in aliases)]
             requirements.append({'term':label,'fact_ids':ids,'status':'有事实提及，需人工核对' if ids else '未知/缺少已确认事实'})
     hits=sum(bool(r['fact_ids']) for r in requirements)
-    report={'algorithm':'keyword-coverage-v1','source_link_id':row['id'],'jd_hash':row['content_hash'],
+    report={'algorithm':'keyword-coverage-v1','source_policy':'linkedin_openwork_first','source':row['source'],'source_url':row['url'],'source_link_id':row['id'],'jd_hash':row['content_hash'],
             'coverage':round(hits/len(requirements)*100,1) if requirements else None,
             'requirements':requirements,'limitations':'仅词项覆盖，非录用概率；否定、等级、年限、签证、薪资及未识别条件均需人工核对。',
             'confirmed_fact_count':len(facts)}
@@ -143,3 +173,12 @@ def authorize(action, source='official'):
         raise PermissionError('Phase 1 仅允许手动导入；网络、填写、提交均禁用')
     if source not in ('official','linkedin','openwork'):
         raise ValueError('未知来源')
+
+
+def batch_match(db):
+    """Offline, explicit batch action. No source fetching or scheduling."""
+    result=[]
+    for row in db.execute("SELECT * FROM jobs WHERE status IN ('imported','matched') ORDER BY id").fetchall():
+        report=match_job(db,row['id'])
+        result.append({'job_id':row['id'],'company':row['company'],'title':row['title'],**report})
+    return sorted(result,key=lambda r:(r['coverage'] is not None,r['coverage'] or 0),reverse=True)
