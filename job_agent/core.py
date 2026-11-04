@@ -81,6 +81,15 @@ def check_source(source, url):
         if host != domain and not host.endswith('.'+domain):
             raise ValueError('来源链接必须属于所选平台')
 
+def source_company_allowed(db, link, company):
+    owner=db.execute('SELECT company FROM jobs WHERE id=?',(link['job_id'],)).fetchone()
+    if owner and norm(owner['company'])==norm(company): return True
+    # Preserve only aliases explicitly reviewed for this source link's active merge.
+    for merge in db.execute('SELECT m.link_ids_json,j.company FROM job_merges m JOIN jobs j ON j.id=m.source_job_id WHERE m.target_job_id=? AND m.undone_at IS NULL',(link['job_id'],)):
+        if link['id'] in json.loads(merge['link_ids_json']) and norm(merge['company'])==norm(company): return True
+    return False
+
+
 def import_job(db, *, company, title, location, source, url, jd, application_url='', requisition_id='', method='manual'):
     if not all(x.strip() for x in (company,title,location,jd)) or len(jd)>200000:
         raise ValueError('公司、岗位、地点和 JD 必填，JD 上限 20 万字符')
@@ -91,10 +100,12 @@ def import_job(db, *, company, title, location, source, url, jd, application_url
     app = safe_url(application_url) if application_url.strip() else None
     with savepoint(db):
         link = db.execute('SELECT * FROM job_source_links WHERE url=?',(url,)).fetchone()
+        if link and not source_company_allowed(db,link,company):
+            raise ValueError('同一来源链接已属于另一家公司，请先人工核对，不能改写 JD 归属')
         job_id = link['job_id'] if link else None
         if not job_id:
             # Company/title/location similarity alone never causes an automatic merge.
-            candidates = db.execute('SELECT * FROM jobs WHERE merged_into IS NULL').fetchall()
+            candidates = db.execute('SELECT * FROM jobs WHERE merged_into IS NULL ORDER BY id').fetchall()
             for candidate in candidates:
                 if norm(candidate['company']) != norm(company):
                     continue

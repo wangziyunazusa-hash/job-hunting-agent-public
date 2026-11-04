@@ -9,7 +9,7 @@ def job(db,**extra):
     args.update(extra); return import_job(db,**args)
 def test_empty_and_migration(db,tmp_path):
     assert db.execute('SELECT COUNT(*) FROM facts').fetchone()[0]==0
-    c=connect(tmp_path/'test.sqlite'); assert c.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==7; c.close()
+    c=connect(tmp_path/'test.sqlite'); assert c.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==8; c.close()
 def test_idempotency_and_snapshots(db):
     a=job(db); assert job(db,url='https://www.linkedin.com/jobs/view/1?utm_source=x#foo')==a
     job(db,jd='Updated SQL')

@@ -375,4 +375,46 @@ with st.expander('本地数据库状态与备份'):
                     st.code(str(restored))
                 except (ValueError,sqlite3.Error,OSError,TimeoutError): st.error('恢复副本创建失败，当前数据库未被替换')
     except (ValueError,sqlite3.Error,OSError): st.error('备份列表校验失败，请检查本地文件；当前数据库未被替换')
+with st.expander('手动批量导入岗位（CSV / JSON）'):
+    from job_agent.bulk_import import prepare_batch, get_batch, commit_batch, csv_template, decode_upload
+    st.caption('只接受你手动整理的数据，不抓取网站。最多 50 条、1 MiB；先在内存副本预演，再明确确认后整批保存。不会导入简历事实。')
+    st.download_button('下载空白 CSV 导入模板',csv_template(),file_name='jobs_manual_import.csv',mime='text/csv')
+    batch_mode=st.radio('批量导入方式',['粘贴文本','上传文件'])
+    batch_format=st.selectbox('批量导入格式',['json','csv'])
+    st.caption('必填列：company、title、location、source、url、jd。source 为 official/linkedin/openwork；可选 application_url、requisition_id。JSON 使用岗位对象数组，CSV 多行 JD 应正确加引号。')
+    batch_upload=None; batch_raw=''
+    if batch_mode=='粘贴文本':
+        batch_raw=st.text_area('粘贴手动整理的岗位数据',height=200)
+    else:
+        batch_upload=st.file_uploader('上传手动整理的 UTF-8 岗位文件',type=['csv','json'])
+        st.caption('上传仅用于本地预览；不上传到模型服务或招聘网站。请确保上方格式与文件类型一致。')
+    if st.button('校验并预览整批导入'):
+        try:
+            if batch_mode=='上传文件':
+                if batch_upload is None: raise ValueError('请先选择 CSV 或 JSON 文件')
+                if not batch_upload.name.lower().endswith('.'+batch_format): raise ValueError('上方所选格式与上传文件扩展名不一致')
+                batch_raw=decode_upload(batch_upload.getvalue())
+            prepare_batch(db,batch_raw,batch_format)
+            st.success('预览已生成；岗位、来源与 JD 尚未写入正式数据')
+        except (ValueError,sqlite3.Error,TimeoutError) as e: st.error(str(e))
+    batch_ids=[r['id'] for r in db.execute('SELECT id FROM batch_imports ORDER BY id DESC')]
+    if batch_ids:
+        batch_id=st.selectbox('查看批量导入预览或历史',batch_ids)
+        try:
+            batch=get_batch(db,batch_id)
+            batch_states={'preview':'等待你确认','committed':'已整批保存','obsolete':'预览已过期'}
+            batch_status=st.empty(); batch_status.write(batch_states[batch['state']])
+            st.json(batch['preview']); st.caption('请特别检查归并后的岗位编号和全部警告。预览中的编号尚未实际建立，提交后才成为正式记录。')
+            st.json(batch['rows'])
+            if batch['stale']: st.warning('数据或预览发生变化，请重新校验后再导入。')
+            if batch['state']=='preview' and not batch['stale']:
+                batch_confirm=st.checkbox('我已逐条核对 JD、来源、归并结果和全部警告',key=f'batch_confirm_{batch_id}')
+                if st.button('确认并整批保存岗位',key=f'batch_commit_{batch_id}'):
+                    try:
+                        result=commit_batch(db,batch_id,expected_hash=batch['preview_hash'],confirmed=batch_confirm)
+                        batch_status.write('已整批保存')
+                        st.success('本批岗位已保存，未访问来源网站或进行投递')
+                        st.json(result)
+                    except (ValueError,sqlite3.Error) as e: st.error(str(e))
+        except (ValueError,sqlite3.Error) as e: st.error(str(e))
 db.close()
