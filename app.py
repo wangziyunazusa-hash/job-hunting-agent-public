@@ -175,4 +175,77 @@ with st.expander('确认或撤销事实状态'):
                 st.rerun()
             except ValueError as e: st.error(str(e))
     else: st.write('尚无事实。')
+with st.expander('申请准备与手动提交记录'):
+    from job_agent.applications import FIELDS, CHECKS, create_application, validate_application, mark_ready, report_submitted, abandon_application, export_application
+    st.caption('本区只整理本地清单，不访问申请页面、不填写或提交。申请链接由已保存来源提供，官方优先；请自行核实其归属。')
+    approved_versions={}
+    for candidate in db.execute("SELECT id FROM resume_versions WHERE status='approved' ORDER BY id DESC").fetchall():
+        candidate_version=validate_version(db,candidate['id'])
+        if candidate_version['status']=='approved':
+            approved_versions[f"版本 #{candidate_version['id']} · 岗位 #{candidate_version['job_id']} · {candidate_version['language']}"]=candidate_version
+    if approved_versions:
+        app_resume_label=st.selectbox('用于申请准备的已批准简历',list(approved_versions))
+        app_resume=approved_versions[app_resume_label]
+        st.write('本次准备引用的已批准简历原文')
+        st.text(app_resume['content'])
+        field_facts={f"#{r['id']} {r['text_'+app_resume['language']][:60]}":r['id'] for r in db.execute('SELECT * FROM facts WHERE confirmed=1 ORDER BY id') if r['text_'+app_resume['language']].strip()}
+        specs=[]
+        st.caption('以下字段可选，值为事实原文。选择前需确认原文适合对应表单字段；系统不推断姓名、联系方式、资格或声明。')
+        for field_key,field_label in FIELDS.items():
+            selection=st.multiselect(f'{field_label}：引用哪些事实',list(field_facts),key=f"app_field_{app_resume['id']}_{field_key}")
+            if selection:
+                specs.append({'field':field_key,'fact_ids':[field_facts[x] for x in selection]})
+                for label in selection:
+                    quoted=db.execute('SELECT * FROM facts WHERE id=?',(field_facts[label],)).fetchone()
+                    st.text(quoted['text_'+app_resume['language']])
+        questions=st.text_area('尚待你回答的问题（每行一项；核实前不能完成准备）',key=f"app_questions_{app_resume['id']}")
+        if st.button('创建本地申请准备清单'):
+            try:
+                create_application(db,app_resume['id'],specs,questions=[q.strip() for q in questions.splitlines() if q.strip()])
+                st.success('清单已创建，尚未操作任何网站')
+            except ValueError as e: st.error(str(e))
+    else: st.write('请先生成、审阅并批准一份当前有效的简历。')
+    app_ids=[r['id'] for r in db.execute('SELECT id FROM applications ORDER BY id DESC')]
+    if app_ids:
+        app_id=st.selectbox('查看申请准备记录',app_ids)
+        application=validate_application(db,app_id)
+        state_labels={'prepared':'待核对','awaiting_user_submit':'本地核对完成，等待你自行提交','needs_review':'已失效，需重新准备','user_reported_submitted':'用户自报已提交（未独立验证）','abandoned':'已放弃'}
+        app_status_display=st.empty(); app_status_display.write(state_labels[application['state']]); st.json(application['payload'])
+        if application['payload'].get('entry'):
+            st.write('已登记申请入口（由你自行打开核对）')
+            st.code(application['payload']['entry']['url'])
+        if not application['currently_valid']:
+            st.warning('所关联的简历、事实或来源已变化；历史记录保留，但不能继续导出当前准备清单。')
+        if application['state']=='prepared':
+            check_labels={'entry_verified':'我已核实申请入口及岗位仍开放','resume_reviewed':'我已核对该简历适用于本次申请','fields_reviewed':'我已逐项核对字段原文，其他字段将自行填写','manual_questions_reviewed':'资格、声明、隐私条款及实际表单问题由我自行阅读和回答'}
+            checks={key:st.checkbox(check_labels[key],key=f"app_check_{app_id}_{key}") for key in CHECKS}
+            if st.button('完成本地核对，等待我自行提交',key=f"ready_{app_id}"):
+                try:
+                    mark_ready(db,app_id,expected_hash=application['payload_hash'],checks=checks)
+                    application=validate_application(db,app_id)
+                    st.success('本地核对完成，尚未提交任何网站')
+                except ValueError as e: st.error(str(e))
+        if application['state']=='awaiting_user_submit':
+            try:
+                packet=export_application(db,app_id)
+                st.download_button('下载申请准备清单',packet,file_name=f'application_{app_id}.json',mime='application/json')
+            except ValueError as e: st.error(str(e))
+            reported=st.checkbox('我已自行在网站完成最终提交，仅在此记录结果',key=f"app_submitted_{app_id}")
+            reported_note=st.text_input('提交记录备注（可选，请勿填写密码或凭证）',key=f"app_note_{app_id}")
+            if st.button('记录我已自行提交',key=f"report_{app_id}"):
+                try:
+                    report_submitted(db,app_id,confirmed=reported,note=reported_note)
+                    application=validate_application(db,app_id)
+                    st.success('已记录为用户自报提交，系统未独立验证')
+                except ValueError as e: st.error(str(e))
+        if application['state'] not in ('user_reported_submitted','abandoned'):
+            give_up=st.checkbox('确认放弃此准备记录',key=f"app_abandon_confirm_{app_id}")
+            if st.button('放弃此记录',key=f"app_abandon_{app_id}"):
+                try:
+                    abandon_application(db,app_id,confirmed=give_up)
+                    application=validate_application(db,app_id)
+                    st.success('已放弃此准备记录')
+                except ValueError as e: st.error(str(e))
+        app_status_display.write(state_labels[application['state']])
+        st.dataframe([dict(r) for r in db.execute('SELECT * FROM application_events WHERE application_id=? ORDER BY id',(app_id,))])
 db.close()
