@@ -1,7 +1,8 @@
+import json
 import streamlit as st
 from job_agent.core import connect, import_job, add_fact, match_job, preferred, possible_duplicates, batch_match, matching_source
 st.set_page_config(page_title='求职工作台', layout='wide')
-st.title('求职工作台 · Phase 3 基础')
+st.title('求职工作台 · 匹配与申请准备')
 st.info('默认本地运行；官方 API 读取需独立授权后手动触发。可生成已确认事实原文草稿；不调用模型、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
 db = connect()
 a,b,c = st.tabs(['导入岗位','事实库','岗位与匹配'])
@@ -48,10 +49,12 @@ with c:
             st.json(match_job(db,ident))
 with st.expander('自动采集与匹配（仅已授权官方 API）'):
     st.caption('点击后依次读取已授权 board、去重、保存快照并匹配；没有授权时只匹配本地数据。不会抓取 LinkedIn/OpenWork，不会在后台定时执行。')
+    pipeline_profiles={'仅事实词项覆盖（不使用偏好）':None,**{f"#{r['id']} {r['name']}":r['id'] for r in db.execute('SELECT * FROM search_profiles ORDER BY id DESC')}}
+    pipeline_profile=st.selectbox('采集后使用的排序偏好',list(pipeline_profiles))
     if st.button('采集已授权来源并匹配'):
         from job_agent.pipeline import collect_and_match
         with st.spinner('采集与匹配中…'):
-            st.json(collect_and_match(db))
+            st.json(collect_and_match(db,profile_id=pipeline_profiles[pipeline_profile]))
 with st.expander('本地批量匹配'):
 
     st.caption('只使用已导入 JD 和已确认事实；不访问网站，不进行定时后台运行。')
@@ -248,4 +251,40 @@ with st.expander('申请准备与手动提交记录'):
                 except ValueError as e: st.error(str(e))
         app_status_display.write(state_labels[application['state']])
         st.dataframe([dict(r) for r in db.execute('SELECT * FROM application_events WHERE application_id=? ORDER BY id',(app_id,))])
+with st.expander('岗位偏好与可解释排序'):
+    from job_agent.preferences import save_profile, rank_jobs, get_ranking, filter_ranked
+    st.caption('偏好只是你的求职意向，不写入简历事实库。LinkedIn/OpenWork 手动导入 JD 优先；这里只排序本地岗位，不搜索网站。每次保存创建独立偏好版本。')
+    with st.form('preferences'):
+        profile_name=st.text_input('偏好名称')
+        title_terms=st.text_area('目标职位关键词（每行一个，可填写日英别名）')
+        location_terms=st.text_area('偏好地点关键词（每行一个，可填写城市别名）')
+        desired_terms=st.text_area('希望 JD 出现的关键词（每行一个）')
+        review_terms=st.text_area('需要人工复核的关键词（每行一个，不自动排除）')
+        if st.form_submit_button('保存偏好版本'):
+            try:
+                preferences={key:[line.strip() for line in value.splitlines() if line.strip()] for key,value in [('titles',title_terms),('locations',location_terms),('keywords',desired_terms),('review_keywords',review_terms)]}
+                save_profile(db,profile_name,preferences)
+                st.success('偏好已保存，未修改任何事实或简历')
+            except ValueError as e: st.error(str(e))
+    profiles={f"#{r['id']} {r['name']}":r['id'] for r in db.execute('SELECT * FROM search_profiles ORDER BY id DESC')}
+    if profiles:
+        profile_label=st.selectbox('使用哪个偏好版本',list(profiles))
+        if st.button('按偏好匹配并排序本地岗位'):
+            try:
+                rank_jobs(db,profiles[profile_label])
+                st.success('已生成可追溯排序快照')
+            except ValueError as e: st.error(str(e))
+        run_ids=[r['id'] for r in db.execute('SELECT id FROM ranking_runs WHERE profile_id=? ORDER BY id DESC',(profiles[profile_label],))]
+        if run_ids:
+            rank_id=st.selectbox('查看排序记录',run_ids)
+            ranking=get_ranking(db,rank_id)
+            if not ranking['integrity_ok']: st.error('排序快照与保存的摘要不一致，请重新计算。')
+            elif ranking['stale']: st.warning('岗位、事实或来源已变化；下面是历史排序，请重新计算后再决定。')
+            minimum=st.slider('仅筛选已知的事实词项覆盖率下限（未知仍保留）',0,100,0)
+            hide_review=st.checkbox('隐藏需人工复核词命中的岗位（默认保留）')
+            filtered=filter_ranked(ranking['report'],min_coverage=minimum,hide_review_flags=hide_review)
+            st.write(f"显示 {len(filtered['shown'])} 个，隐藏 {len(filtered['hidden'])} 个，保留未知覆盖 {filtered['unknown_retained']} 个")
+            st.dataframe([{'岗位编号':j['job_id'],'公司':j['company'],'岗位':j['title'],'地点':j['location'],'偏好词项覆盖':j['preference_coverage'],'事实词项覆盖':j['coverage'],'匹配来源':j['source'],'需复核词命中':bool(j['review_flags'])} for j in filtered['shown']])
+            st.json({'逐项依据':filtered['shown'],'隐藏原因':filtered['hidden']})
+            st.download_button('下载排序快照与依据',json.dumps(ranking,ensure_ascii=False,indent=2),file_name=f'ranking_{rank_id}.json',mime='application/json')
 db.close()

@@ -165,7 +165,7 @@ def match_job(db, job_id):
             'coverage':round(hits/len(requirements)*100,1) if requirements else None,
             'requirements':requirements,'limitations':'仅词项覆盖，非录用概率；否定、等级、年限、签证、薪资及未识别条件均需人工核对。',
             'confirmed_fact_count':len(facts)}
-    with db:
+    with savepoint(db):
         db.execute('INSERT INTO match_reports(job_id,report_json) VALUES(?,?)',(job_id,json.dumps(report,ensure_ascii=False)))
         db.execute("UPDATE jobs SET status='matched' WHERE id=? AND status IN ('imported','matched')",(job_id,))
         db.execute('INSERT INTO audit_events(action,entity_id) VALUES(?,?)',('match',job_id))
