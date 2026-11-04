@@ -6,3 +6,5 @@
 任务：匹配时优先使用已手动导入的 LinkedIn/OpenWork JD，两者同级、最近观察优先，缺失才回退官方；输出实际来源。官方核验及申请链接仍优先企业官方。逐项判断 supported/unknown/conflict，引用原始要求和 fact_id。严格区分技能提及、熟练程度、经验年限、语言等级、签证与地点。不知道用 unknown，不推断不符合；相似词不是证明。
 输出：{job_id,jd_hash,facts_revision,requirements:[{requirement,status,fact_ids,reason}],coverage,hard_constraints:[],limitations:[],needs_confirmation:[]}。
 拒绝：输出录用概率、将 unknown 改写成不符合或已符合、引用未确认事实。当前实现仅显示规则词项覆盖；本 Prompt 尚未由模型执行。
+
+当前扩展：semantic.py 已实现离线输入/输出协议及逐字引用校验，尚未接入模型。用户明确选择 API 关闭；不得把手动导入的参考意见冒充已运行模型、资格事实或录用概率。

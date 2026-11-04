@@ -287,4 +287,50 @@ with st.expander('岗位偏好与可解释排序'):
             st.dataframe([{'岗位编号':j['job_id'],'公司':j['company'],'岗位':j['title'],'地点':j['location'],'偏好词项覆盖':j['preference_coverage'],'事实词项覆盖':j['coverage'],'匹配来源':j['source'],'需复核词命中':bool(j['review_flags'])} for j in filtered['shown']])
             st.json({'逐项依据':filtered['shown'],'隐藏原因':filtered['hidden']})
             st.download_button('下载排序快照与依据',json.dumps(ranking,ensure_ascii=False,indent=2),file_name=f'ranking_{rank_id}.json',mime='application/json')
+with st.expander('语义分析准备（API 未启用）'):
+    from job_agent.semantic import prepare_request, preview_request, import_result, get_report, review_report
+    st.info('按你的选择暂不启用 API。这里只生成本地预览、校验手动导入的结果，不读取密钥，也不发送数据。')
+    semantic_jobs={f"#{r['id']} {r['company']} · {r['title']}":r['id'] for r in db.execute("SELECT * FROM jobs WHERE merged_into IS NULL AND status IN ('imported','matched') ORDER BY id")}
+    if semantic_jobs:
+        semantic_job_label=st.selectbox('分析目标岗位',list(semantic_jobs))
+        semantic_facts={f"#{r['id']} {r['category']} · {(r['text_ja'] or r['text_en'])[:60]}":r['id'] for r in db.execute('SELECT * FROM facts WHERE confirmed=1 ORDER BY id')}
+        semantic_selected=st.multiselect('未来允许参与分析的事实（默认不选）',list(semantic_facts))
+        st.caption('本地预览只加入 JD 和所选事实原文，不自动加入证据路径、申请链接或未选事实。原文中仍可能有个人信息，请自行检查。未选择事实时只能准备 JD 分析。')
+        if st.button('生成离线分析预览'):
+            try:
+                prepare_request(db,semantic_jobs[semantic_job_label],[semantic_facts[x] for x in semantic_selected])
+                st.success('预览已保存在本地，未调用 API')
+            except ValueError as e: st.error(str(e))
+    semantic_requests=[r['id'] for r in db.execute('SELECT id FROM semantic_requests ORDER BY id DESC')]
+    if semantic_requests:
+        semantic_request_id=st.selectbox('查看分析请求预览',semantic_requests)
+        try:
+            semantic_preview=preview_request(db,semantic_request_id)
+            if semantic_preview['stale']: st.warning('JD 或事实等上下文已变化，请重新生成预览。')
+            st.json(semantic_preview)
+            st.download_button('下载离线分析预览',json.dumps(semantic_preview,ensure_ascii=False,indent=2),file_name=f'semantic_request_{semantic_request_id}.json',mime='application/json')
+            imported_result=st.text_area('手动导入结构化分析结果（JSON，必须符合预览中的格式）',key=f"semantic_result_{semantic_request_id}")
+            if st.button('校验并保存参考结果'):
+                try:
+                    import_result(db,semantic_request_id,imported_result)
+                    st.success('引用校验通过，结果仍需人工审阅；未修改事实或简历')
+                except ValueError as e: st.error(str(e))
+        except ValueError as e: st.error(str(e))
+    semantic_report_ids=[r['id'] for r in db.execute('SELECT id FROM semantic_reports ORDER BY id DESC')]
+    if semantic_report_ids:
+        semantic_report_id=st.selectbox('查看语义参考结果',semantic_report_ids)
+        try:
+            semantic_report=get_report(db,semantic_report_id)
+            report_labels={'review_required':'待人工审阅','reviewed':'已核对的参考意见','obsolete':'输入或引用已变化，结果失效','rejected':'用户已拒绝此参考意见'}
+            st.write(report_labels[semantic_report['status']]); st.caption(semantic_report['notice']); st.json(semantic_report['result'])
+            if semantic_report['status']=='review_required':
+                semantic_reviewed=st.checkbox('我已核对每条 JD、事实原文引用和语义，理解引用存在不等于满足要求',key=f"semantic_reviewed_{semantic_report_id}")
+                semantic_reject=st.checkbox('拒绝采纳这份参考意见',key=f"semantic_reject_{semantic_report_id}")
+                semantic_note=st.text_input('参考意见审阅备注',key=f"semantic_note_{semantic_report_id}")
+                if st.button('保存参考意见审阅结论'):
+                    try:
+                        review_report(db,semantic_report_id,expected_hash=semantic_report['result_hash'],confirmed=semantic_reviewed,reject=semantic_reject,note=semantic_note)
+                        st.success('已保存参考意见结论，不改变简历批准或任何资格判断')
+                    except ValueError as e: st.error(str(e))
+        except ValueError as e: st.error(str(e))
 db.close()
