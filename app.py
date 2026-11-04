@@ -1,10 +1,15 @@
 import json
+import sqlite3
 import streamlit as st
 from job_agent.core import connect, import_job, add_fact, match_job, preferred, possible_duplicates, batch_match, matching_source
 st.set_page_config(page_title='求职工作台', layout='wide')
 st.title('求职工作台 · 匹配与申请准备')
 st.info('默认本地运行；官方 API 读取需独立授权后手动触发。可生成已确认事实原文草稿；不调用模型、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
-db = connect()
+try:
+    db = connect()
+except (ValueError, OSError, sqlite3.Error):
+    st.error('本地数据库未能安全打开或升级。请保留 data/backups 中的备份，检查数据文件和版本；程序未继续操作。')
+    st.stop()
 a,b,c = st.tabs(['导入岗位','事实库','岗位与匹配'])
 with a:
     with st.form('import'):
@@ -333,4 +338,41 @@ with st.expander('语义分析准备（API 未启用）'):
                         st.success('已保存参考意见结论，不改变简历批准或任何资格判断')
                     except ValueError as e: st.error(str(e))
         except ValueError as e: st.error(str(e))
+with st.expander('本地数据库状态与备份'):
+    from job_agent.database import health, main_path, create_backup, list_backups, restore_copy, verify_backup
+    import sqlite3
+    db_path=main_path(db); backup_folder=db_path.parent/'backups'
+    st.caption('使用本地 SQLite，无需另开数据库服务。资料和备份不上传 GitHub；后续部署/多人使用再评估服务器数据库。')
+    st.write('当前数据库位置'); st.code(str(db_path))
+    if st.button('检查数据库状态'):
+        try:
+            status=health(db)
+            if status['healthy']: st.success('完整性和外键检查通过')
+            else: st.error('检查发现异常，请先保留备份并停止修改数据')
+            st.json(status)
+        except (ValueError,sqlite3.Error,OSError): st.error('状态检查失败，请保留数据并检查文件')
+    if st.button('创建本地一致性备份'):
+        try:
+            backup=create_backup(db)
+            st.success('备份已创建并通过校验')
+            st.code(backup['name'])
+        except (ValueError,sqlite3.Error,OSError,TimeoutError): st.error('备份未完成，当前数据库未被替换')
+    try:
+        backup_entries=list_backups(backup_folder)
+        st.dataframe(backup_entries)
+        valid_backups=[item['name'] for item in backup_entries if item['valid']]
+        if valid_backups:
+            backup_name=st.selectbox('选择校验通过的本地备份',valid_backups)
+            st.caption('备份包含全部个人事实、JD 和申请记录，未加密。下载后也请保存在私人位置。')
+            verify_backup(backup_folder,backup_name)
+            st.download_button('下载所选数据库备份',(backup_folder/backup_name).read_bytes(),file_name=backup_name,mime='application/octet-stream')
+            st.download_button('下载对应备份校验信息',(backup_folder/(backup_name+'.json')).read_bytes(),file_name=backup_name+'.json',mime='application/json')
+            restore_confirmed=st.checkbox('确认只创建独立恢复副本，不覆盖正在使用的数据库')
+            if st.button('从备份生成恢复副本'):
+                try:
+                    restored=restore_copy(db,backup_folder,backup_name,confirmed=restore_confirmed)
+                    st.success('恢复副本已创建，当前工作台仍使用原数据库')
+                    st.code(str(restored))
+                except (ValueError,sqlite3.Error,OSError,TimeoutError): st.error('恢复副本创建失败，当前数据库未被替换')
+    except (ValueError,sqlite3.Error,OSError): st.error('备份列表校验失败，请检查本地文件；当前数据库未被替换')
 db.close()

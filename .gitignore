@@ -5,3 +5,9 @@ data/*
 !data/.gitkeep
 .env
 *.egg-info/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.sqlite-*
+*.db
+*.db-*

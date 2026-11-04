@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from contextlib import contextmanager
 import uuid
+import os
 import hashlib
 import ipaddress
 import json
@@ -13,16 +14,25 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 ROOT = Path(__file__).resolve().parent.parent
 
 def connect(path=None):
+    from .database import migrate, secure_file
+    if path is None and os.environ.get('JOB_AGENT_DB_PATH'):
+        configured=Path(os.environ['JOB_AGENT_DB_PATH'])
+        if not configured.is_absolute() or configured.suffix not in ('.sqlite3','.sqlite','.db'):
+            raise ValueError('JOB_AGENT_DB_PATH 需要绝对路径和 SQLite 文件扩展名')
+        path=configured
     path = Path(path) if path else ROOT / 'data/jobs.sqlite3'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    if path.is_symlink(): raise ValueError('数据库路径不能是符号链接')
+    if not path.exists():
+        try: secure_file(path)
+        except FileExistsError: pass
+    db = sqlite3.connect(path,timeout=5)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
-    db.executescript((ROOT / 'migrations/001_initial.sql').read_text())
-    for migration in sorted((ROOT / 'migrations').glob('*.sql')):
-        version = int(migration.name.split('_')[0])
-        if not db.execute('SELECT 1 FROM schema_migrations WHERE version=?',(version,)).fetchone():
-            db.executescript(migration.read_text())
+    try:
+        migrate(db)
+    except Exception:
+        db.close(); raise
     return db
 
 @contextmanager
