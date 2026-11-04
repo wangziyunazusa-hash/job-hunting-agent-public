@@ -1,8 +1,8 @@
 import streamlit as st
 from job_agent.core import connect, import_job, add_fact, match_job, preferred, possible_duplicates, batch_match, matching_source
 st.set_page_config(page_title='求职工作台', layout='wide')
-st.title('求职工作台 · Phase 2')
-st.info('默认本地运行；官方 API 读取需独立授权后手动触发。不生成简历、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
+st.title('求职工作台 · Phase 3 基础')
+st.info('默认本地运行；官方 API 读取需独立授权后手动触发。可生成已确认事实原文草稿；不调用模型、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
 db = connect()
 a,b,c = st.tabs(['导入岗位','事实库','岗位与匹配'])
 with a:
@@ -117,4 +117,62 @@ with st.expander('人工核对跨来源岗位'):
         if st.button('撤销这次合并',key=f"undo_{row['id']}"):
             try: undo_merge(db,row['id']); st.rerun()
             except ValueError as e: st.error(str(e))
+with st.expander('日英简历草稿与审阅'):
+    from job_agent.resumes import create_draft, validate_version, approve_version, export_version, recommend_facts, create_matched_draft
+    st.caption('只按你选择的顺序组装已确认的原文，不自动翻译或润色。每条内容保留事实 ID 和证据；不是完整的履歴書排版。')
+    resume_jobs={f"#{r['id']} {r['company']} · {r['title']}":r['id'] for r in db.execute("SELECT * FROM jobs WHERE merged_into IS NULL AND status IN ('imported','matched') ORDER BY id")}
+    if resume_jobs:
+        resume_job=st.selectbox('简历目标岗位',list(resume_jobs))
+        resume_lang=st.selectbox('简历语言',['ja','en'])
+        available={f"#{r['id']} {r['category']} · {r['text_'+resume_lang][:60]}":r['id'] for r in db.execute('SELECT * FROM facts WHERE confirmed=1 ORDER BY id') if r['text_'+resume_lang].strip()}
+        chosen_facts=st.multiselect('按希望呈现的顺序选择事实',list(available))
+        if st.button('生成待审阅草稿'):
+            try:
+                create_draft(db,resume_jobs[resume_job],resume_lang,[available[x] for x in chosen_facts])
+                st.success('草稿已生成，请审阅全文和每条证据')
+            except ValueError as e: st.error(str(e))
+        suggestions=recommend_facts(db,resume_jobs[resume_job],resume_lang)
+        st.caption('规则推荐只按 JD 词项覆盖排列，不代表满足语言等级、年限或必选条件。')
+        if suggestions: st.dataframe(suggestions)
+        if st.button('按 JD 词项筛选事实并生成草稿'):
+            try:
+                create_matched_draft(db,resume_jobs[resume_job],resume_lang)
+                st.success('已按词项关联组装草稿，尚未批准')
+            except ValueError as e: st.error(str(e))
+    else: st.write('请先导入岗位，再添加并确认事实。')
+    versions=db.execute('SELECT id FROM resume_versions ORDER BY id DESC').fetchall()
+    if versions:
+        version_id=st.selectbox('查看草稿版本',[r['id'] for r in versions])
+        version=validate_version(db,version_id)
+        st.write(f"版本 #{version_id} · {version['language']} · {version['status']}")
+        st.text(version['content']); st.dataframe(version['claims'])
+        if version['status']=='obsolete': st.warning('该版本已失效，请按当前 JD 和事实重新生成。')
+        else:
+            reviewed=st.checkbox('我已逐条核实事实、语言和证据，并审阅此版本全文',key=f"review_{version_id}")
+            if version['status']=='review_required' and st.button('批准此版本',key=f"approve_{version_id}"):
+                try:
+                    approve_version(db,version_id,expected_hash=version['content_hash'],confirmed=reviewed)
+                    st.rerun()
+                except ValueError as e: st.error(str(e))
+            if version['status']=='approved':
+                try:
+                    body,trace=export_version(db,version_id)
+                    st.download_button('下载已批准文本',body,file_name=f'resume_{version_id}_{version["language"]}.txt',mime='text/plain')
+                    st.download_button('下载事实溯源清单',trace,file_name=f'resume_{version_id}_evidence.json',mime='application/json')
+                except ValueError as e: st.error(str(e))
+with st.expander('确认或撤销事实状态'):
+    from job_agent.core import review_fact
+    fact_options={f"#{r['id']} {r['category']} · {'已确认' if r['confirmed'] else '待确认'}":r['id'] for r in db.execute('SELECT * FROM facts ORDER BY id')}
+    if fact_options:
+        fact_label=st.selectbox('待核对事实',list(fact_options))
+        fact_row=db.execute('SELECT * FROM facts WHERE id=?',(fact_options[fact_label],)).fetchone()
+        st.text(fact_row['text_ja']); st.text(fact_row['text_en']); st.text(fact_row['evidence'])
+        review_action=st.radio('事实状态操作',['确认事实','撤销确认'])
+        fact_reviewed=st.checkbox('我已核对此条事实和证据',key=f"fact_review_{fact_row['id']}_{fact_row['revision']}")
+        if bool(fact_row['confirmed'])!=(review_action=='确认事实') and st.button('保存事实状态'):
+            try:
+                review_fact(db,fact_row['id'],confirmed=review_action=='确认事实',reviewed=fact_reviewed)
+                st.rerun()
+            except ValueError as e: st.error(str(e))
+    else: st.write('尚无事实。')
 db.close()

@@ -5,4 +5,4 @@
 输入：已确认基础简历、语言 ja/en、JD、事实版本、允许修改范围。
 任务：只微调措辞、排序、详略；每条输出有 fact_ids。锁定姓名、学历、职称、日期、数值、职责归属和语言等级。不得将团队结果写成个人结果。日语敬体/常体保持一致；英语使用自然克制表达。不增加 JD 技能。生成原文与改文差异，未经用户审阅状态只能 review_required。
 输出：{language,status:"review_required",claims:[{claim_id,original,revised,fact_ids}],locked_fields:[],gaps:[],needs_confirmation:[]}。
-拒绝：无事实依据的句子、硬信息变化、越权批准。Phase 1 返回 not_implemented，不生成正文。
+拒绝：无事实依据的句子、硬信息变化、越权批准。当前 Phase 3 基础由确定性 resumes.py 原文组装与规则排序实现；本 Prompt 尚未接入模型，自动翻译和微调仍未实现。

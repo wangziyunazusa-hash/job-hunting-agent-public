@@ -185,3 +185,12 @@ def batch_match(db):
         report=match_job(db,row['id'])
         result.append({'job_id':row['id'],'company':row['company'],'title':row['title'],**report})
     return sorted(result,key=lambda r:(r['coverage'] is not None,r['coverage'] or 0),reverse=True)
+
+
+def review_fact(db, fact_id, *, confirmed, reviewed=False):
+    if not reviewed: raise ValueError('请明确确认已核对此次事实状态变更')
+    with savepoint(db):
+        row=db.execute('SELECT * FROM facts WHERE id=?',(fact_id,)).fetchone()
+        if row is None: raise ValueError('事实不存在')
+        db.execute('UPDATE facts SET confirmed=?,revision=revision+1 WHERE id=?',(int(confirmed),fact_id))
+        db.execute('INSERT INTO audit_events(action,entity_id) VALUES(?,?)',('fact_confirmed' if confirmed else 'fact_revoked',fact_id))
