@@ -84,7 +84,7 @@ def import_job(db, *, company, title, location, source, url, jd, application_url
         job_id = link['job_id'] if link else None
         if not job_id:
             # Company/title/location similarity alone never causes an automatic merge.
-            candidates = db.execute('SELECT * FROM jobs').fetchall()
+            candidates = db.execute('SELECT * FROM jobs WHERE merged_into IS NULL').fetchall()
             for candidate in candidates:
                 if norm(candidate['company']) != norm(company):
                     continue
@@ -117,8 +117,11 @@ def preferred(db, job_id):
 
 def possible_duplicates(db, job_id):
     job = db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
-    return [dict(r) for r in db.execute('SELECT * FROM jobs WHERE id<>?',(job_id,))
-            if all(norm(r[k])==norm(job[k]) for k in ('company','title','location'))]
+    if job is None or job['merged_into'] is not None: return []
+    distinct={r[0] if r[1]==job_id else r[1] for r in db.execute(
+        'SELECT left_job_id,right_job_id FROM duplicate_reviews WHERE left_job_id=? OR right_job_id=?',(job_id,job_id))}
+    return [dict(r) for r in db.execute('SELECT * FROM jobs WHERE id<>? AND merged_into IS NULL',(job_id,))
+            if r['id'] not in distinct and all(norm(r[k])==norm(job[k]) for k in ('company','title','location'))]
 
 def add_fact(db, category, text_ja, text_en, evidence, confirmed=False):
     if not category.strip() or not evidence.strip() or not (text_ja.strip() or text_en.strip()):
@@ -178,7 +181,7 @@ def authorize(action, source='official'):
 def batch_match(db):
     """Offline, explicit batch action. No source fetching or scheduling."""
     result=[]
-    for row in db.execute("SELECT * FROM jobs WHERE status IN ('imported','matched') ORDER BY id").fetchall():
+    for row in db.execute("SELECT * FROM jobs WHERE status IN ('imported','matched') AND merged_into IS NULL ORDER BY id").fetchall():
         report=match_job(db,row['id'])
         result.append({'job_id':row['id'],'company':row['company'],'title':row['title'],**report})
     return sorted(result,key=lambda r:(r['coverage'] is not None,r['coverage'] or 0),reverse=True)

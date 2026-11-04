@@ -28,7 +28,7 @@ with b:
             except ValueError as e: st.error(str(e))
     st.dataframe([dict(r) for r in db.execute('SELECT * FROM facts')])
 with c:
-    jobs=[dict(r) for r in db.execute('SELECT * FROM jobs ORDER BY id DESC')]
+    jobs=[dict(r) for r in db.execute('SELECT * FROM jobs WHERE merged_into IS NULL ORDER BY id DESC')]
     if not jobs: st.write('尚无岗位，请先导入。')
     else:
         labels={f"#{j['id']} {j['company']} · {j['title']}":j['id'] for j in jobs}
@@ -88,4 +88,33 @@ with st.expander('官方 API 授权与刷新（未配置具体公司）'):
     st.dataframe([dict(r) for r in db.execute('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 50')])
     st.write('API 来源可用状态（缺席仅代表该来源暂未列出，不代表岗位全局失效）')
     st.dataframe([dict(r) for r in db.execute('SELECT * FROM source_postings')])
+with st.expander('人工核对跨来源岗位'):
+    from job_agent.reviews import merge_jobs, mark_distinct, undo_merge
+    st.caption('先比较 JD、岗位编号、地点和申请入口；跨语言标题或公司别名也可手动核对。合并只调整来源分组，保留原始岗位、快照和历史报告，可撤销。')
+    options={f"#{r['id']} {r['company']} · {r['title']} · {r['location']}":r['id'] for r in db.execute('SELECT * FROM jobs WHERE merged_into IS NULL ORDER BY id')}
+    if len(options)>=2:
+        with st.container():
+            left_label=st.selectbox('待核对岗位',list(options))
+            right_label=st.selectbox('保留的主岗位',list(options),index=1)
+            decision=st.radio('核对结论',['同一岗位：合并来源','不同岗位：不再提示重复'])
+            note=st.text_area('核对依据')
+            confirm=st.checkbox('我已核实这两个岗位的关系',key=f"confirm_pair_{options[left_label]}_{options[right_label]}")
+            # Each link opens no website; display only stored JD text.
+            for label in (left_label,right_label):
+                st.write(label)
+                for row in db.execute('SELECT l.url,s.content FROM job_source_links l JOIN jd_snapshots s ON s.id=l.latest_snapshot_id WHERE l.job_id=?',(options[label],)):
+                    st.code(row['url']); st.text(row['content'])
+            if st.button('保存核对结论'):
+                try:
+                    if decision.startswith('同一岗位'):
+                        merge_jobs(db,options[left_label],options[right_label],note,confirmed=confirm)
+                    else: mark_distinct(db,options[left_label],options[right_label],note,confirmed=confirm)
+                    st.rerun()
+                except ValueError as e: st.error(str(e))
+    for row in db.execute('SELECT * FROM job_merges WHERE undone_at IS NULL ORDER BY id DESC').fetchall():
+        st.write(f"合并 #{row['id']}：岗位 #{row['source_job_id']} → #{row['target_job_id']}")
+        st.text(row['reason'])
+        if st.button('撤销这次合并',key=f"undo_{row['id']}"):
+            try: undo_merge(db,row['id']); st.rerun()
+            except ValueError as e: st.error(str(e))
 db.close()
