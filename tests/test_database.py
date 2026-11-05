@@ -16,7 +16,7 @@ def seed(db):
 def test_health_new_db(db):
     report=health(db)
     assert report['healthy'] and report['schema_current']
-    assert report['schema_versions']==list(range(1,9))
+    assert report['schema_versions']==list(range(1,10))
     assert report['row_counts']['facts']==0
     assert report['missing_schema_objects']==[]
 
@@ -75,7 +75,7 @@ def test_symlink_db_refused(db,tmp_path):
 def test_unknown_future_schema_not_modified(tmp_path):
     path=tmp_path/'future.sqlite'; c=sqlite3.connect(path)
     c.execute('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY)')
-    c.executemany('INSERT INTO schema_migrations VALUES(?)',[(i,) for i in range(1,10)]); c.commit(); c.close()
+    c.executemany('INSERT INTO schema_migrations VALUES(?)',[(i,) for i in range(1,11)]); c.commit(); c.close()
     before=sha256(path)
     with pytest.raises(ValueError): connect(path)
     assert sha256(path)==before

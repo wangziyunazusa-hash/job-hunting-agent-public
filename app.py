@@ -4,13 +4,13 @@ import streamlit as st
 from job_agent.core import connect, import_job, add_fact, match_job, preferred, possible_duplicates, batch_match, matching_source
 st.set_page_config(page_title='求职工作台', layout='wide')
 st.title('求职工作台 · 匹配与申请准备')
-st.info('默认本地运行；官方 API 读取需独立授权后手动触发。可生成已确认事实原文草稿；不调用模型、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
+st.info('默认本地运行；官方 API 读取需独立授权后手动触发。兼顾岗位匹配与简历小改建议；只输出文本，不修改 PDF/Word，不调用模型、不填写、不投递。LinkedIn/OpenWork 仅手动导入。')
 try:
     db = connect()
 except (ValueError, OSError, sqlite3.Error):
     st.error('本地数据库未能安全打开或升级。请保留 data/backups 中的备份，检查数据文件和版本；程序未继续操作。')
     st.stop()
-a,b,c = st.tabs(['导入岗位','事实库','岗位与匹配'])
+a,b,c,d = st.tabs(['导入岗位','事实库','岗位与匹配','简历轻量修改'])
 with a:
     with st.form('import'):
         company=st.text_input('公司'); title=st.text_input('岗位名称'); location=st.text_input('地点')
@@ -125,7 +125,7 @@ with st.expander('人工核对跨来源岗位'):
         if st.button('撤销这次合并',key=f"undo_{row['id']}"):
             try: undo_merge(db,row['id']); st.rerun()
             except ValueError as e: st.error(str(e))
-with st.expander('日英简历草稿与审阅'):
+with st.expander('事实素材草稿与审阅（辅助功能）'):
     from job_agent.resumes import create_draft, validate_version, approve_version, export_version, recommend_facts, create_matched_draft
     st.caption('只按你选择的顺序组装已确认的原文，不自动翻译或润色。每条内容保留事实 ID 和证据；不是完整的履歴書排版。')
     resume_jobs={f"#{r['id']} {r['company']} · {r['title']}":r['id'] for r in db.execute("SELECT * FROM jobs WHERE merged_into IS NULL AND status IN ('imported','matched') ORDER BY id")}
@@ -417,4 +417,70 @@ with st.expander('手动批量导入岗位（CSV / JSON）'):
                         st.json(result)
                     except (ValueError,sqlite3.Error) as e: st.error(str(e))
         except (ValueError,sqlite3.Error) as e: st.error(str(e))
+with d:
+    from job_agent.light_edits import save_passage, get_passage, advice, propose_edit, get_suggestion, review_suggestion, export_text, editing_brief
+    st.write('保留你的简历，只对需要的句子提出轻量建议')
+    st.caption('不导入或修改 PDF/Word，不重新排版。一次粘贴一条 bullet 或一小段原文；输出原文、修改理由、可复制替换文本和事实依据。模型 API 关闭，当前自动建议只清理行尾空白并提示词项缺口，措辞小改可手动录入后审阅。')
+    edit_jobs={f"#{r['id']} {r['company']} · {r['title']}":r['id'] for r in db.execute("SELECT * FROM jobs WHERE merged_into IS NULL AND status IN ('imported','matched') ORDER BY id")}
+    if edit_jobs:
+        edit_job=st.selectbox('小改目标岗位',list(edit_jobs))
+        edit_language=st.selectbox('原文语言',['ja','en'],key='light_edit_language')
+        edit_section=st.text_input('原文位置（例如：工作经历第 2 条）')
+        edit_original=st.text_area('粘贴这一条日语或英语简历原文',height=160)
+        edit_facts={f"#{r['id']} {r['category']} · {r['text_'+edit_language][:60]}":r['id'] for r in db.execute('SELECT * FROM facts WHERE confirmed=1 ORDER BY id') if r['text_'+edit_language].strip()}
+        selected_edit_facts=st.multiselect('支持这段经历的已确认事实',list(edit_facts))
+        locked_words=st.text_area('不可改动的姓名、公司名、职称、学历、日期、等级等（每行一个原文词）')
+        st.caption('数字会自动保护；其他硬信息请明确锁定。系统不能自动识别所有实体或证明意思完全不变，仍需逐条核实。')
+        if st.button('保存原文并查看轻量建议'):
+            try:
+                save_passage(db,edit_jobs[edit_job],edit_language,edit_section,edit_original,[edit_facts[x] for x in selected_edit_facts],[x.strip() for x in locked_words.splitlines() if x.strip()])
+                st.success('原文已保存，仅保存在本地，不会改动你的文件')
+            except ValueError as e: st.error(str(e))
+    else: st.info('先导入目标 JD，再粘贴你愿意修改的一条简历原文；无需上传 PDF。')
+    edit_passages=[r['id'] for r in db.execute('SELECT id FROM resume_passages ORDER BY id DESC')]
+    if edit_passages:
+        edit_passage_id=st.selectbox('查看简历原文核对版本',edit_passages)
+        edit_passage=get_passage(db,edit_passage_id)
+        if edit_passage['stale']: st.warning('JD 或事实依据已变化，请重新保存并核对这段原文。')
+        else:
+            current_advice=advice(db,edit_passage_id)
+            st.write('原文'); st.text(current_advice['original'])
+            st.write('可复制文本（当前保守规则输出）'); st.code(current_advice['replacement'])
+            st.write(current_advice['reason']); st.write('已提及的 JD 词项：',current_advice['matched_jd_terms'])
+            st.dataframe(current_advice['gaps']); st.dataframe(current_advice['facts'])
+            st.caption(current_advice['notice'])
+            st.download_button('下载离线小改说明（不发送给模型）',json.dumps(editing_brief(db,edit_passage_id),ensure_ascii=False,indent=2),file_name=f'light_edit_brief_{edit_passage_id}.json',mime='application/json')
+            st.write('录入并核对一条措辞小改')
+            edited_text=st.text_area('建议替换文本（仅小改）',value=current_advice['replacement'],key=f'light_replacement_{edit_passage_id}')
+            edit_reason=st.text_area('修改理由及对应岗位诉求',key=f'light_reason_{edit_passage_id}')
+            edit_quote=st.text_area('对应 JD 逐字原文',key=f'light_quote_{edit_passage_id}')
+            if st.button('保存待审阅的小改建议'):
+                try:
+                    propose_edit(db,edit_passage_id,edited_text,edit_reason,edit_quote)
+                    st.success('建议已保存，请对照原文审阅；未修改事实或简历文件')
+                except ValueError as e: st.error(str(e))
+    edit_suggestions=[r['id'] for r in db.execute('SELECT id FROM resume_edit_suggestions ORDER BY id DESC')]
+    if edit_suggestions:
+        suggestion_id=st.selectbox('查看逐条修改建议',edit_suggestions)
+        suggestion=get_suggestion(db,suggestion_id)
+        edit_statuses={'review_required':'待核对','accepted':'用户已采纳文字建议（未自动应用）','rejected':'用户不采纳','obsolete':'依据已变化，建议失效'}
+        edit_status_slot=st.empty(); edit_status_slot.write(edit_statuses[suggestion['status']])
+        st.write('原文'); st.text(suggestion['passage']['original_text'])
+        st.write('建议替换文本'); st.code(suggestion['replacement'])
+        st.write('修改理由'); st.text(suggestion['reason'])
+        st.write('对应 JD'); st.text(suggestion['jd_quote'])
+        st.write('改动对照'); st.code(suggestion['diff'],language='diff')
+        st.dataframe(suggestion['passage']['facts']); st.caption(suggestion['notice'])
+        if suggestion['stale']: st.warning('这条建议已失效，不能直接作为当前替换文本导出。')
+        else:
+            st.download_button('下载原文、理由与替换文本',export_text(db,suggestion_id),file_name=f'resume_light_edit_{suggestion_id}.txt',mime='text/plain')
+            if suggestion['status']=='review_required':
+                edit_reviewed=st.checkbox('我已核实原文、替换文本及事实依据，硬信息和责任范围没有改变',key=f'light_review_{suggestion_id}')
+                edit_decision=st.radio('这条建议的决定',['不采纳','采纳文字建议，由我自行替换'],key=f'light_decision_{suggestion_id}')
+                if st.button('保存这条建议的决定'):
+                    try:
+                        review_suggestion(db,suggestion_id,expected_hash=suggestion['suggestion_hash'],confirmed=edit_reviewed,accept=edit_decision.startswith('采纳'))
+                        edit_status_slot.write(edit_statuses[get_suggestion(db,suggestion_id)['status']])
+                        st.success('已记录决定，不修改 PDF、Word、事实库或已批准简历')
+                    except ValueError as e: st.error(str(e))
 db.close()

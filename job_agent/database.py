@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 NAME=re.compile(r'backup_[0-9]{8}T[0-9]{12}Z_[0-9a-f]{12}\.sqlite3')
 TABLES=('jobs','job_source_links','jd_snapshots','facts','match_reports','resume_versions',
-        'applications','search_profiles','ranking_runs','semantic_requests','semantic_reports','batch_imports')
+        'applications','search_profiles','ranking_runs','semantic_requests','semantic_reports','batch_imports','resume_passages','resume_edit_suggestions')
 REQUIRED={
     1:{'schema_migrations','jobs','job_source_links','jd_snapshots','facts','match_reports','audit_events'},
     2:{'source_permissions','sync_runs','source_postings','api_cache'},
     3:{'job_merges','duplicate_reviews'},4:{'resume_versions','resume_claims'},
     5:{'applications','application_events'},6:{'search_profiles','ranking_runs'},
-    7:{'semantic_requests','semantic_reports'},8:{'batch_imports'}}
+    7:{'semantic_requests','semantic_reports'},8:{'batch_imports'},9:{'resume_passages','resume_edit_suggestions'}}
 
 
 def layout_errors(db, versions):
