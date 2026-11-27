@@ -11,3 +11,13 @@ data/*
 *.sqlite-*
 *.db
 *.db-*
+
+# Private credentials, exports and local work products
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+private/
+exports/
