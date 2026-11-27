@@ -1,40 +1,40 @@
-# 求職支援Agent / Job Hunting Agent
+# Job Hunting Agent
 
-求人情報の整理・比較と、応募書類の軽微な修正を支援するローカルアプリです。Python・SQLite・Streamlitで構成し、コードの生成・修正には主にCodexを使用しています。画面は現在中国語です。
+A local application for organizing job descriptions, comparing opportunities, preparing applications, and reviewing small resume edits. Built with Python, SQLite, and Streamlit, with Codex used extensively for code generation and revision. The application UI is currently in Chinese.
 
-## プロジェクトの構成と現在地
+## Project status
 
-本プロジェクトは、Codexの定期検索ワークフローと、このリポジトリの管理アプリを組み合わせて開発しています。
+The project combines a separately configured Codex scheduled search workflow with the management application in this repository.
 
-| 構成 | 現在の状態 |
+| Component | Current status |
 | --- | --- |
-| Codexの定期検索 | 別途設定したタスクで求人を検索し、公式JDの条件確認、候補の絞り込み、推薦履歴の記録を実行。個人用設定・結果は非公開で、このリポジトリには含みません。 |
-| この管理アプリ | JD取込、出典管理、重複確認、条件比較、応募書類の修正案の審閲、応募準備を実装。 |
-| 両者の自動連携 | 未実装。定期検索を含む全機能が、このアプリだけで動くわけではありません。 |
+| Scheduled search in Codex | A separate task searches for jobs, checks requirements against official job descriptions, shortlists opportunities, and records previous recommendations. Its private configuration and results are not included here. |
+| Local management application | Implements JD import, source tracking, duplicate review, keyword comparison, resume edit review, and application preparation. |
+| Automatic connection between them | Not implemented. Search results and recommendation history are not automatically synchronized with this application. |
 
-本リポジトリを起動しても、定期検索タスクや毎日の通知は自動的には作成されません。検索結果とアプリの連携、重複管理の一元化が今後の改善対象です。開発中の試作アプリであり、実運用の精度・効果を保証するものではありません。
+Running this repository does not create a scheduled search task or daily notifications. Connecting search results to the application and unifying duplicate tracking remain development priorities. This is a prototype; its real-world matching accuracy and productivity impact have not been independently established.
 
-## 主な機能
+## Features
 
-- **求人管理**：JDの貼付、CSV/JSONの手動一括取込、出典とJD更新履歴の保存。
-- **重複確認**：会社と求人番号・応募URLによる照合、類似候補の人工確認、統合と取消。
-- **比較・絞り込み**：希望条件と確認済み経歴のキーワードを分けて表示。カバー率は採用確率や資格判定ではありません。
-- **履歴書の軽微な修正支援**：原文・修正理由・差し替え文・経歴上の根拠・差分を比較して本人が確認。PDF/Wordの編集や再レイアウトは行いません。
-- **応募準備**：確認済み経歴の原文から日英の素材を組み立て、本人が確認してTXT/JSONを出力。サイトへの入力・提出は行いません。
-- **データ保全**：SQLiteの状態確認、更新前バックアップ、別ファイルへの復元。
+- **Job management:** paste job descriptions or manually import CSV/JSON batches, preserving source links and JD snapshots.
+- **Duplicate review:** compare company and requisition IDs or application URLs; manually review similar jobs, merge records, and undo merges.
+- **Comparison and filtering:** display preference matches separately from keywords found in confirmed resume facts. Keyword coverage is not a hiring probability or eligibility decision.
+- **Small resume edits:** compare the original passage, reason, replacement text, supporting facts, and diff before accepting a suggestion. No PDF/Word editing or reformatting.
+- **Application preparation:** assemble confirmed Japanese or English fact text into supporting drafts and export reviewed TXT/JSON materials. No website form filling or submission.
+- **Database maintenance:** check SQLite health, back up before schema upgrades, and restore to a separate copy.
 
-自然言語の自動推敲とモデルAPIは無効です。修正文は手動入力が基本で、現在の自動提案は行末空白の除去や限定的なキーワードの注意喚起です。6つのAgentプロンプトは設計用の契約であり、6体のモデルが動作する構成ではありません。
+Model API calls and automatic natural-language rewriting are disabled in the application. Replacement text is entered manually; automatic suggestions currently cover trailing whitespace and a limited set of keyword/evidence prompts. The six agent prompts are design contracts, not six running model agents.
 
-## 求人情報の取得範囲
+## Job source access
 
-- LinkedIn / OpenWork：手動取込のみ。無許可のスクレイピング・ブラウザ自動操作は行いません。
-- Greenhouse / Lever / Ashby：取得先ごとに利用権限を明示登録した場合のみ、固定の読取APIを利用できます。取得先は同梱していません。
-- アプリの取得処理はボタン操作時のみ実行し、内蔵の常駐スケジューラはありません。
-- 比較するJDはLinkedIn = OpenWorkの手動取込を優先し、なければ公式JDを使用。公式確認・応募先リンクは公式を優先します。
+- **LinkedIn / OpenWork:** manual import only. No unauthorized scraping or browser automation.
+- **Greenhouse / Lever / Ashby:** fixed read-only API endpoints, requiring explicit permission for each source. No companies or boards are preconfigured.
+- Collection runs when the user clicks a button. The application has no persistent scheduler.
+- JD comparison prefers manually imported LinkedIn and OpenWork descriptions equally, with official descriptions as a fallback. Official verification and application links prioritize official sources.
 
-## 起動方法
+## Quick start
 
-Python 3.11以降を使用し、このリポジトリのディレクトリで実行します。
+Use Python 3.11 or later. Run these commands from the repository directory:
 
 ```sh
 python3 -m venv .venv
@@ -43,62 +43,68 @@ python3 -m pip install -e '.[test]'
 python3 -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-表示されたローカルURLを開きます。通常は `http://127.0.0.1:8501` です。認証や公開サーバー用の構成はないため、個人のPCで利用してください。
+Open the local URL shown in the terminal, usually `http://127.0.0.1:8501`. The application has no public-server authentication setup and is intended for use on your own computer.
 
-初回起動時に空の `data/jobs.sqlite3` を作成します。求人・経歴・会社の設定は初期登録されていません。クラウドDB、APIキー、モデルAPIの設定は不要です。Windowsでは仮想環境の有効化に `.venv\Scripts\Activate.ps1` を使用してください。
+On Windows PowerShell, activate the environment with `.venv\Scripts\Activate.ps1` instead of the `source` command.
 
-## 基本の使い方
+The first launch creates an empty database at `data/jobs.sqlite3`. No jobs, resume facts, or company settings are preloaded. No cloud database, API key, or model API configuration is required.
 
-1. 「导入岗位」でJDと出典リンクを手動登録します。一括取込はプレビュー後に確認して保存します。
-2. 「事实库」で実際の経歴と証拠の所在を登録し、確認済みのものだけを使用します。
-3. 「岗位与匹配」で出典・重複・条件の比較結果を確認します。不明な要件は本人が確認します。
-4. 「简历轻量修改」で短い原文と根拠を登録し、差し替え案を比較・確認します。原ファイルには書き戻しません。
-5. 必要に応じて応募準備用のテキストを出力し、応募先で本人が入力・最終提出します。
+## Basic workflow
 
-## 技術構成
+The labels below match the current Chinese UI.
+
+1. **Import jobs (`导入岗位`):** enter a JD and source link. For batch imports, inspect the preview and explicitly confirm before saving.
+2. **Fact library (`事实库`):** record real experience and its evidence location. Only explicitly confirmed facts are used.
+3. **Jobs and matching (`岗位与匹配`):** inspect sources, possible duplicates, and keyword comparisons. Check unknown requirements manually.
+4. **Small resume edits (`简历轻量修改`):** enter a short passage and supporting facts, compare replacement text, and review it. The original resume file is never modified.
+5. Export preparation materials as needed, then fill in and submit the actual application yourself.
+
+## Architecture
 
 ```text
 app.py                   Streamlit UI
 job_agent/
-  core.py                JD・出典・経歴・キーワード比較
-  sources.py             権限を確認したATS読取
-  pipeline.py            ボタン操作による取得と比較
-  bulk_import.py         一括取込のプレビューと一括保存
-  reviews.py             重複の人工確認・統合・取消
-  preferences.py         希望条件と説明付き並び替え
-  light_edits.py         小さな修正案・差分・確認
-  resumes.py             経歴原文の組み立てと承認
-  applications.py        ローカルの応募準備・本人報告
-  semantic.py            無効化されたAPIのオフライン入出力契約
-  database.py            マイグレーション・バックアップ
-migrations/              SQLiteスキーマ 001–009
-prompts/                 6役割の設計プロンプト
-tests/                  コア・取込・権限・UIのテスト
+  core.py                Jobs, sources, facts, and keyword comparison
+  sources.py             Permission-checked, read-only ATS collection
+  pipeline.py            User-triggered collection and matching
+  bulk_import.py         Batch preview and atomic import
+  reviews.py             Manual duplicate review, merge, and undo
+  preferences.py         Versioned preferences and explainable ranking
+  light_edits.py         Small resume suggestions, diffs, and review
+  resumes.py             Fact-text assembly and approval
+  applications.py        Local preparation and self-reported outcomes
+  semantic.py            Offline contracts; model API calls disabled
+  database.py            Migrations, backups, and restore copies
+migrations/              SQLite schema versions 001–009
+prompts/                 Six role-specific design prompts
+tests/                   Core logic, imports, permissions, and UI tests
 ```
 
-Python標準ライブラリを中心としたローカル構成です。UIはStreamlit、テストはpytestとStreamlit AppTestを使用します。独立したWeb APIサーバー、ベクトルDB、モデルSDKは使用していません。
+The application uses Python's standard library for its core logic, Streamlit for the UI, and pytest with Streamlit AppTest for testing. It has no separate API server, vector database, or model SDK.
 
-## テスト
+## Tests
 
 ```sh
 python3 -m pytest -q
 ```
 
-テストは一時DBと模擬応答を使い、実在の求人サイトやモデルAPIへ接続しません。依存範囲は `pyproject.toml` を参照してください。依存ロックファイルは未導入です。
+Tests use temporary databases and simulated responses. They do not access real recruitment websites or model services. Dependency ranges are in `pyproject.toml`; a dependency lockfile has not been introduced.
 
-## データと公開範囲
+## Privacy and repository contents
 
-実際の履歴書、経歴、希望条件、推薦履歴、DB、バックアップ、証拠ファイル、認証情報はリポジトリに含めません。`data/` は `.gitkeep` を除いてGit管理対象外です。ダウンロードしたTXT/JSONには個人情報が含まれ得るため、別途非公開で管理します。DBはアプリ独自の暗号化を行っていません。
+Actual resumes, personal facts, preferences, recommendation history, databases, backups, evidence files, and credentials belong in private local storage. The `data/` directory is excluded from Git except for `.gitkeep`. Downloaded TXT/JSON materials may contain personal information and should also be kept private. The application does not encrypt the database itself.
 
-利用時間の短縮など、個人の効果測定値はこのリポジトリでは検証していません。コード生成にCodexを使っていることと、開発者が独力で実装・調査できる範囲は区別します。
+Personal time-saving estimates are not verified by this repository. The use of Codex for implementation is separate from what a developer can independently investigate or implement.
 
-## 詳細資料
+## Further documentation
 
-- [現在の機能と開発範囲（中文）](docs/当前项目说明.md)
-- [履歴書の軽微な修正](docs/简历轻量修改说明.md)
-- [一括取込](docs/批量导入说明.md)・[希望条件による比較](docs/偏好排序说明.md)
-- [DBとバックアップ](docs/数据库与备份说明.md)
-- [テスト記録](docs/验收记录.md)
-- [初期技術案・過去の設計（現状とは異なります）](docs/技术方案.md)
+The detailed documentation below is currently in Chinese.
 
-過去のPhase資料より、このREADMEと「当前项目说明」を現在の機能説明として優先してください。
+- [Current implementation and scope](docs/当前项目说明.md)
+- [Small resume edit workflow](docs/简历轻量修改说明.md)
+- [Batch imports](docs/批量导入说明.md) and [preference-based comparison](docs/偏好排序说明.md)
+- [Database maintenance and backups](docs/数据库与备份说明.md)
+- [Validation records](docs/验收记录.md)
+- [Original technical proposal and historical design](docs/技术方案.md)
+
+Use this README and the current implementation document as the source of truth. Earlier phase documents include historical plans that do not describe all current capabilities.
